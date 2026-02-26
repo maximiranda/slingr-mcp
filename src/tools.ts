@@ -402,7 +402,7 @@ export const tools: Record<string, ToolDefinition> = {
         },
         execute: async (args) => {
             const { entityName, limit = 20, offset = 0 } = args;
-            const response = await runtimeClient.get(`/data/${entityName}?_size=${limit}&_from=${offset}`);
+            const response = await runtimeClient.get(`/data/${entityName}?_size=${limit}&_offset=${offset}`);
             return {
                 content: [{ type: "text", text: JSON.stringify(response.data, null, 2) }],
             };

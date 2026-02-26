@@ -1,17 +1,15 @@
 # Slingr MCP Server
 
-This is an MCP (Model Context Protocol) server for the Slingr platform. It provides tools, resources, and prompts to interact with Slingr applications and search through its documentation.
+This is an MCP (Model Context Protocol) server for the Slingr platform. It provides tools, resources, and prompts to interact with both the Slingr application structure (Builder) and its data (Runtime).
 
 ## Features
 
 - **Documentation Search (RAG)**: Search through Slingr's official documentation using a local vector database (LanceDB) and local embeddings.
-- **Entity Management**: List entities, get detailed metadata, and create new entities.
-- **Field Management**: Create fields within entities.
-- **Record Management**: List, get, create, update, and delete records from any entity.
-- **Group Management**: List groups and manage entity permissions.
-- **Development Tools**: Check for pending changes and review them before pushing.
+- **Application Structure (Builder)**: List entities, get detailed metadata, manage permissions, and create new entities or fields.
+- **Data Management (Runtime)**: List, get, create, update, and delete records from any entity.
+- **Developer Tools**: Check for pending metadata changes and review them before pushing.
 - **MCP Resources**: Browse entities and documentation files as resources.
-- **MCP Prompts**: Specialized prompts to guide the creation of entities and debugging of scripts.
+- **MCP Prompts**: Specialized prompts for entity modeling and script debugging.
 
 ## Installation
 
@@ -22,9 +20,13 @@ This is an MCP (Model Context Protocol) server for the Slingr platform. It provi
 
 2. Configure environment variables in `.env`:
    ```env
-   SLINGR_API_URL=https://platform.slingr.io/dev/api
-   SLINGR_TOKEN=your_token_here
+   SLINGR_API_URL=https://your-domain.slingrs.io/dev/builder/api
+   SLINGR_EMAIL=your-email@example.com
+   SLINGR_PASSWORD=your-password
    ```
+
+   > [!NOTE]
+   > The server will automatically deduce the **Runtime API URL** by replacing `/builder/api` with `/runtime/api` in your `SLINGR_API_URL`. You can override this by setting `SLINGR_RUNTIME_API_URL` explicitly.
 
 3. Build the project:
    ```bash
@@ -33,15 +35,11 @@ This is an MCP (Model Context Protocol) server for the Slingr platform. It provi
 
 4. Ingest documentation (first time or when updated):
    ```bash
-   # Option 1: Using the standalone script
+   # Using the standalone script
    npx tsx scripts/ingest-docs.ts
-
-   # Option 2: Using the MCP tool 'ingest_documentation' (once the server is running)
    ```
 
 ## Usage
-
-You can connect this server to any MCP-compatible client (like Claude Desktop).
 
 ### In Claude Desktop
 
@@ -54,8 +52,9 @@ Add this to your `claude_desktop_config.json`:
       "command": "node",
       "args": ["/path/to/slingr-mcp/build/index.js"],
       "env": {
-        "SLINGR_API_URL": "https://platform.slingr.io/dev/api",
-        "SLINGR_TOKEN": "your_token_here"
+        "SLINGR_API_URL": "https://your-domain.slingrs.io/dev/builder/api",
+        "SLINGR_EMAIL": "your-email@example.com",
+        "SLINGR_PASSWORD": "your-password"
       }
     }
   }
@@ -64,23 +63,28 @@ Add this to your `claude_desktop_config.json`:
 
 ## Tools
 
+### Application structure (Builder)
 - `check_connection`: Verifies the API connection.
 - `list_entities`: Lists all entities.
-- `get_entity`: Gets detailed entity metadata.
+- `get_entity`: Gets detailed entity metadata (use `verbose: true` for full details).
 - `create_entity`: Creates a new entity.
 - `create_field`: Adds a field to an entity.
-- `list_records`: Fetches records from an entity.
-- `get_record`: Fetches a specific record.
-- `create_record`: Creates a new record.
-- `update_record`: Updates a record.
-- `delete_record`: Deletes a record.
-- `search_documentation`: Searches the documentation.
-- `ingest_documentation`: Updates the vector database.
-- `list_groups`: Lists security groups.
-- `get_entity_permissions`: Gets permissions for an entity.
+- `list_groups`: Lists security groups (roles).
+- `get_entity_permissions`: Gets permissions for an entity (simplified output).
 - `update_entity_permissions`: Updates permissions for a group.
 - `check_pending_changes`: Checks for development changes.
 - `get_pending_changes`: Lists changes ready to be pushed.
+
+### Data Management (Runtime)
+- `list_records`: Fetches records from an entity.
+- `get_record`: Fetches a specific record. Supports `fields` parameter for partial fetching.
+- `create_record`: Creates a new record.
+- `update_record`: Updates a record.
+- `delete_record`: Deletes a record.
+
+### Other
+- `search_documentation`: Searches the documentation.
+- `ingest_documentation`: Updates the vector database.
 
 ## Resources
 
