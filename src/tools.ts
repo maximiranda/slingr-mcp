@@ -84,10 +84,9 @@ export const tools: Record<string, ToolDefinition> = {
                 content: [{ type: "text", text: `Entity created! ID: ${response.data.id}` }],
             };
         }
-    },
-    update_entity_permissions: {
+    }, update_entity_permissions: {
         name: "update_entity_permissions",
-        description: "Updates the permissions for a specific entity and group (role) by applying partial updates. This fetches current permissions behind the scenes so you only need to submit the fields that change.",
+        description: "Updates the permissions for a specific entity and group (role) by applying partial updates. This fetches current permissions behind the scenes to map IDs, so you only need to submit the fields that change.",
         inputSchema: {
             type: "object",
             properties: {
@@ -95,7 +94,7 @@ export const tools: Record<string, ToolDefinition> = {
                 group: { type: "string", description: "The ID, name, or label of the group (role) to apply updates to." },
                 updates: {
                     type: "object",
-                    description: `Partial RolePermission object containing the fields to change. Example: { canEdit: { type: "ALWAYS" } }`
+                    description: `Partial RolePermission object containing the fields to change. Example: { canEdit: "ALWAYS", fields: [{ name: "status", permission: "READ_ONLY" }] }`
                 },
             },
             required: ["entityId", "group", "updates"],
@@ -108,6 +107,7 @@ export const tools: Record<string, ToolDefinition> = {
             });
             const input = schema.parse(args || {});
 
+            // Fetch current permissions to ensure we have the internal IDs to map the partial payload
             const getResponse = await builderClient.get(`/entities/${input.entityId}/permissions?_size=100`);
             let data = getResponse.data;
             let permissionsArray = data.items || data.permissions || (Array.isArray(data) ? data : []);
@@ -125,62 +125,117 @@ export const tools: Record<string, ToolDefinition> = {
                 throw new Error(`Group '${input.group}' not found in entity permissions.`);
             }
 
-            permissionsArray[groupIndex] = {
-                ...permissionsArray[groupIndex],
-                ...input.updates
+            const targetGroup = permissionsArray[groupIndex];
+
+            // Build ONLY the partial update payload requested
+            const groupUpdate: any = {
+                id: targetGroup.id,
+                name: targetGroup.name,
+                label: targetGroup.label
             };
 
-            let payload: any;
-            if (Array.isArray(data)) {
-                payload = permissionsArray;
-            } else {
-                payload = { ...data };
-                if (data.items) {
-                    payload.items = permissionsArray;
-                } else if (data.permissions) {
-                    payload.permissions = permissionsArray;
-                } else {
-                    payload = permissionsArray;
+            // 1. Process top-level permissions properly
+            const topLevelPerms = ['canCreate', 'canAccess', 'canEdit', 'canDelete', 'canSeeAuditLogs'];
+            topLevelPerms.forEach(perm => {
+                if (input.updates[perm] !== undefined) {
+                    let newVal = input.updates[perm];
+                    const existingPermId = targetGroup[perm]?.id;
+                    if (typeof newVal === 'string') {
+                        groupUpdate[perm] = { type: newVal };
+                    } else if (typeof newVal === 'object' && newVal !== null) {
+                        groupUpdate[perm] = { ...newVal };
+                    }
+
+                    if (existingPermId && groupUpdate[perm] && !groupUpdate[perm].id) {
+                        groupUpdate[perm].id = existingPermId;
+                    }
                 }
+            });
+
+            if (input.updates.canImport !== undefined) groupUpdate.canImport = input.updates.canImport;
+            if (input.updates.canExport !== undefined) groupUpdate.canExport = input.updates.canExport;
+
+            // 2. Process Fields safely (match by name or ID and map to strict Slingr structure)
+            if (Array.isArray(input.updates.fields)) {
+                groupUpdate.fields = [];
+                input.updates.fields.forEach((updatedField: any) => {
+                    const existingField = targetGroup.fields?.find((f: any) =>
+                        f.name === updatedField.name || f.id === updatedField.id
+                    );
+                    if (existingField) {
+                        groupUpdate.fields.push({
+                            id: existingField.id,
+                            name: existingField.name,
+                            label: existingField.label,
+                            permission: updatedField.permission
+                        });
+                    }
+                });
             }
 
-            const putResponse = await builderClient.put(`/entities/${input.entityId}/permissions`, payload);
+            // 3. Process Actions safely
+            if (Array.isArray(input.updates.actions)) {
+                groupUpdate.actions = [];
+                input.updates.actions.forEach((updatedAction: any) => {
+                    const existingAction = targetGroup.actions?.find((a: any) =>
+                        a.name === updatedAction.name || a.id === updatedAction.id
+                    );
+                    if (existingAction) {
+                        let actionPerm = updatedAction.permission;
+                        if (typeof actionPerm === 'string') {
+                            actionPerm = { type: actionPerm };
+                        } else if (typeof actionPerm === 'object' && actionPerm !== null) {
+                            actionPerm = { ...actionPerm };
+                        }
 
-            const updatedPermissions = putResponse.data?.items || putResponse.data?.permissions || putResponse.data || [];
-            const resultGroup = Array.isArray(updatedPermissions)
-                ? updatedPermissions.find((p: any) =>
-                    p.name === input.group || p.id === input.group || p.label === input.group ||
-                    p.group?.name === input.group || p.group?.id === input.group || p.group?.label === input.group
-                )
-                : null;
+                        const existingPermId = existingAction.permission?.id;
+                        if (existingPermId && actionPerm && !actionPerm.id) {
+                            actionPerm.id = existingPermId;
+                        }
+
+                        const actionUpdate: any = {
+                            id: existingAction.id,
+                            name: existingAction.name,
+                            label: existingAction.label
+                        };
+
+                        if (actionPerm) {
+                            actionUpdate.permission = actionPerm;
+                        }
+
+                        // Process Action Parameters if they exist
+                        if (Array.isArray(updatedAction.parameters)) {
+                            actionUpdate.parameters = [];
+                            updatedAction.parameters.forEach((updatedParam: any) => {
+                                const existingParam = existingAction.parameters?.find((p: any) =>
+                                    p.name === updatedParam.name || p.id === updatedParam.id
+                                );
+                                if (existingParam) {
+                                    actionUpdate.parameters.push({
+                                        id: existingParam.id,
+                                        name: existingParam.name,
+                                        label: existingParam.label,
+                                        permission: updatedParam.permission
+                                    });
+                                }
+                            });
+                        }
+
+                        groupUpdate.actions.push(actionUpdate);
+                    }
+                });
+            }
+
+            // The specific payload structure the Slingr API wants for PUT partial updates
+            const payload = { permissions: [groupUpdate] };
+
+            await builderClient.put(`/entities/${input.entityId}/permissions`, payload);
 
             return {
                 content: [{
                     type: "text",
-                    text: `Successfully updated permissions for group '${input.group}'.\n\nUpdated Group Configuration:\n${JSON.stringify(resultGroup || input.updates, null, 2)}`
+                    text: `Successfully updated permissions for group '${input.group}'.\n\nPayload sent:\n${JSON.stringify(payload, null, 2)}`
                 }],
-            };
-        }
-    },
-    check_pending_changes: {
-        name: "check_pending_changes",
-        description: "Checks if there are pending changes (metadata or backups) that need to be pushed.",
-        inputSchema: { type: "object", properties: {} },
-        execute: async () => {
-            const response = await builderClient.get("/development/hasChangesToPush?skipLog=true");
-            return {
-                content: [{ type: "text", text: JSON.stringify(response.data, null, 2) }],
-            };
-        }
-    },
-    get_pending_changes: {
-        name: "get_pending_changes",
-        description: "Fetches the detailed list of pending metadata changes to review before pushing.",
-        inputSchema: { type: "object", properties: {} },
-        execute: async () => {
-            const response = await builderClient.get("/development/detectPushChanges?skipLog=true");
-            return {
-                content: [{ type: "text", text: JSON.stringify(response.data, null, 2) }],
             };
         }
     },
@@ -204,70 +259,89 @@ export const tools: Record<string, ToolDefinition> = {
             const response = await builderClient.get(`/entities/${input.entityId}/permissions?_size=100`);
 
             let data = response.data;
-            let resultData: any;
+            let items = data.items || data.permissions || (Array.isArray(data) ? data : []);
 
-            if (data && Array.isArray(data.items)) {
-                let items = data.items;
-                if (input.group) {
-                    items = items.filter((p: any) =>
-                        p.name === input.group || p.id === input.group || p.label === input.group ||
-                        p.group?.name === input.group || p.group?.id === input.group || p.group?.label === input.group
-                    );
-                }
-
-                const cleanedItems = items.map((p: any) => {
-                    const cleaned: any = {
-                        id: p.id,
-                        name: p.name,
-                        label: p.label,
-                    };
-                    if (p.canCreate?.type) cleaned.canCreate = p.canCreate.type;
-                    if (p.canAccess?.type) cleaned.canAccess = p.canAccess.type;
-                    if (p.canEdit?.type) cleaned.canEdit = p.canEdit.type;
-                    if (p.canDelete?.type) cleaned.canDelete = p.canDelete.type;
-                    if (p.canSeeAuditLogs?.type) cleaned.canSeeAuditLogs = p.canSeeAuditLogs.type;
-
-                    if (p.fields && Array.isArray(p.fields)) {
-                        cleaned.fields = p.fields.map((f: any) => ({
-                            name: f.name,
-                            label: f.label,
-                            permission: f.permission
-                        }));
-                    }
-
-                    if (p.actions && Array.isArray(p.actions)) {
-                        cleaned.actions = p.actions.map((a: any) => ({
-                            name: a.name,
-                            label: a.label,
-                            permission: a.permission?.type
-                        }));
-                    }
-
-                    return cleaned;
-                });
-                resultData = { ...data, items: cleanedItems };
-            } else {
-                const filterByGroup = (arr: any[]) => arr ? arr.filter((p: any) =>
+            if (input.group) {
+                items = items.filter((p: any) =>
                     p.name === input.group || p.id === input.group || p.label === input.group ||
                     p.group?.name === input.group || p.group?.id === input.group || p.group?.label === input.group
-                ) : [];
-
-                if (Array.isArray(data)) {
-                    resultData = input.group ? filterByGroup(data) : data;
-                } else {
-                    resultData = { ...data };
-                    if (input.group) {
-                        if (data.permissions) resultData.permissions = filterByGroup(data.permissions);
-                        if (data.fields) resultData.fields = filterByGroup(data.fields);
-                        if (data.views) resultData.views = filterByGroup(data.views);
-                        if (data.actions) resultData.actions = filterByGroup(data.actions);
-                    }
-                }
+                );
             }
 
-            const resultText = JSON.stringify(resultData, null, 2);
+            const cleanedItems = items.map((p: any) => {
+                const cleaned: any = {
+                    id: p.id,
+                    name: p.name,
+                    label: p.label,
+                };
+                if (p.canCreate?.type) cleaned.canCreate = p.canCreate.type;
+                if (p.canAccess?.type) cleaned.canAccess = p.canAccess.type;
+                if (p.canEdit?.type) cleaned.canEdit = p.canEdit.type;
+                if (p.canDelete?.type) cleaned.canDelete = p.canDelete.type;
+                if (p.canSeeAuditLogs?.type) cleaned.canSeeAuditLogs = p.canSeeAuditLogs.type;
+
+                if (p.fields && Array.isArray(p.fields)) {
+                    cleaned.fields = p.fields.map((f: any) => ({
+                        name: f.name,
+                        label: f.label,
+                        permission: f.permission
+                    }));
+                }
+
+                if (p.actions && Array.isArray(p.actions)) {
+                    cleaned.actions = p.actions.map((a: any) => {
+                        const clAction: any = {
+                            name: a.name,
+                            label: a.label,
+                            permission: a.permission?.type || a.permission
+                        };
+                        // Support extraction of nested Action Parameters if present
+                        if (a.parameters && Array.isArray(a.parameters)) {
+                            clAction.parameters = a.parameters.map((param: any) => ({
+                                name: param.name,
+                                label: param.label,
+                                permission: param.permission
+                            }));
+                        }
+                        return clAction;
+                    });
+                }
+
+                return cleaned;
+            });
+
+            // Return just the object if filtered by group (matching input/output expected formats easily)
+            let resultData;
+            if (input.group) {
+                resultData = cleanedItems.length > 0 ? cleanedItems[0] : { error: `Group '${input.group}' not found.` };
+            } else {
+                resultData = { items: cleanedItems };
+            }
+
             return {
-                content: [{ type: "text", text: resultText }],
+                content: [{ type: "text", text: JSON.stringify(resultData, null, 2) }],
+            };
+        }
+    },
+    check_pending_changes: {
+        name: "check_pending_changes",
+        description: "Checks if there are pending changes (metadata or backups) that need to be pushed.",
+        inputSchema: { type: "object", properties: {} },
+        execute: async () => {
+            const response = await builderClient.get("/development/hasChangesToPush?skipLog=true");
+            return {
+                content: [{ type: "text", text: JSON.stringify(response.data, null, 2) }],
+            };
+        }
+    },
+    get_pending_changes: {
+        name: "get_pending_changes",
+        description: "Fetches the detailed list of pending metadata changes to review before pushing.",
+        inputSchema: { type: "object", properties: {} },
+        execute: async () => {
+            const response = await builderClient.get("/development/detectPushChanges?skipLog=true");
+            return {
+                content: [{ type: "text", text: JSON.stringify(response.data, null, 2) }],
             };
         }
     },
