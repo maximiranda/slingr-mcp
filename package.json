@@ -10,7 +10,8 @@
   "scripts": {
     "build": "tsc",
     "start": "node build/src/index.js",
-    "dev": "tsc && node build/src/index.js"
+    "dev": "tsc && node build/src/index.js",
+    "inspector": "npx @modelcontextprotocol/inspector node build/src/index.js"
   },
   "dependencies": {
     "@lancedb/lancedb": "^0.26.2",

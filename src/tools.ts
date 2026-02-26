@@ -84,7 +84,8 @@ export const tools: Record<string, ToolDefinition> = {
                 content: [{ type: "text", text: `Entity created! ID: ${response.data.id}` }],
             };
         }
-    }, update_entity_permissions: {
+    },
+    update_entity_permissions: {
         name: "update_entity_permissions",
         description: "Updates the permissions for a specific entity and group (role) by applying partial updates. This fetches current permissions behind the scenes to map IDs, so you only need to submit the fields that change.",
         inputSchema: {
@@ -268,17 +269,36 @@ export const tools: Record<string, ToolDefinition> = {
                 );
             }
 
+            // Función auxiliar para no perder scripts o filtros en permisos tipo CONDITION
+            const formatPermission = (permObj: any) => {
+                if (!permObj) return undefined;
+                if (typeof permObj === 'string') return permObj;
+
+                // Extraemos claves ignorando 'id' y 'type'
+                const keys = Object.keys(permObj).filter(k => k !== 'id' && k !== 'type');
+
+                // Si no hay claves extra (como script), podemos simplificarlo a un string
+                if (keys.length === 0 && permObj.type) {
+                    return permObj.type;
+                }
+
+                // Si hay un script o un filtro, devolvemos el objeto sin el id
+                const { id, ...rest } = permObj;
+                return rest;
+            };
+
             const cleanedItems = items.map((p: any) => {
                 const cleaned: any = {
                     id: p.id,
                     name: p.name,
                     label: p.label,
                 };
-                if (p.canCreate?.type) cleaned.canCreate = p.canCreate.type;
-                if (p.canAccess?.type) cleaned.canAccess = p.canAccess.type;
-                if (p.canEdit?.type) cleaned.canEdit = p.canEdit.type;
-                if (p.canDelete?.type) cleaned.canDelete = p.canDelete.type;
-                if (p.canSeeAuditLogs?.type) cleaned.canSeeAuditLogs = p.canSeeAuditLogs.type;
+
+                if (p.canCreate) cleaned.canCreate = formatPermission(p.canCreate);
+                if (p.canAccess) cleaned.canAccess = formatPermission(p.canAccess);
+                if (p.canEdit) cleaned.canEdit = formatPermission(p.canEdit);
+                if (p.canDelete) cleaned.canDelete = formatPermission(p.canDelete);
+                if (p.canSeeAuditLogs) cleaned.canSeeAuditLogs = formatPermission(p.canSeeAuditLogs);
 
                 if (p.fields && Array.isArray(p.fields)) {
                     cleaned.fields = p.fields.map((f: any) => ({
@@ -293,9 +313,8 @@ export const tools: Record<string, ToolDefinition> = {
                         const clAction: any = {
                             name: a.name,
                             label: a.label,
-                            permission: a.permission?.type || a.permission
+                            permission: formatPermission(a.permission)
                         };
-                        // Support extraction of nested Action Parameters if present
                         if (a.parameters && Array.isArray(a.parameters)) {
                             clAction.parameters = a.parameters.map((param: any) => ({
                                 name: param.name,
@@ -310,7 +329,6 @@ export const tools: Record<string, ToolDefinition> = {
                 return cleaned;
             });
 
-            // Return just the object if filtered by group (matching input/output expected formats easily)
             let resultData;
             if (input.group) {
                 resultData = cleanedItems.length > 0 ? cleanedItems[0] : { error: `Group '${input.group}' not found.` };
@@ -320,6 +338,105 @@ export const tools: Record<string, ToolDefinition> = {
 
             return {
                 content: [{ type: "text", text: JSON.stringify(resultData, null, 2) }],
+            };
+        }
+    },
+    copy_entity_permissions: {
+        name: "copy_entity_permissions",
+        description: "Copies all permissions from a source group to a target group within the same entity.",
+        inputSchema: {
+            type: "object",
+            properties: {
+                entityId: { type: "string", description: "The ID of the entity." },
+                sourceGroup: { type: "string", description: "The ID, name, or label of the source group." },
+                targetGroup: { type: "string", description: "The ID, name, or label of the target group." }
+            },
+            required: ["entityId", "sourceGroup", "targetGroup"],
+        },
+        execute: async (args) => {
+            const schema = z.object({
+                entityId: z.string(),
+                sourceGroup: z.string(),
+                targetGroup: z.string()
+            });
+            const input = schema.parse(args || {});
+
+            if (input.sourceGroup === input.targetGroup) {
+                throw new Error("sourceGroup and targetGroup must be different.");
+            }
+
+            const getResponse = await builderClient.get(`/entities/${input.entityId}/permissions?_size=100`);
+            let permissionsArray = getResponse.data?.items || getResponse.data?.permissions || (Array.isArray(getResponse.data) ? getResponse.data : []);
+
+            if (!Array.isArray(permissionsArray) || permissionsArray.length === 0) {
+                throw new Error("Could not parse permissions array from Slingr API response.");
+            }
+
+            const source = permissionsArray.find((p: any) =>
+                p.name === input.sourceGroup || p.id === input.sourceGroup || p.label === input.sourceGroup ||
+                p.group?.name === input.sourceGroup || p.group?.id === input.sourceGroup || p.group?.label === input.sourceGroup
+            );
+
+            const target = permissionsArray.find((p: any) =>
+                p.name === input.targetGroup || p.id === input.targetGroup || p.label === input.targetGroup ||
+                p.group?.name === input.targetGroup || p.group?.id === input.targetGroup || p.group?.label === input.targetGroup
+            );
+
+            if (!source) throw new Error(`Source group '${input.sourceGroup}' not found.`);
+            if (!target) throw new Error(`Target group '${input.targetGroup}' not found.`);
+
+            const copyPerm = (sourcePerm: any, targetPermId?: string) => {
+                if (!sourcePerm) return undefined;
+                if (typeof sourcePerm === 'string') {
+                    return targetPermId ? { id: targetPermId, type: sourcePerm } : { type: sourcePerm };
+                }
+                const { id, ...rest } = sourcePerm;
+                return targetPermId ? { id: targetPermId, ...rest } : { ...rest };
+            };
+
+            const topLevelPerms = ['canCreate', 'canAccess', 'canEdit', 'canDelete', 'canSeeAuditLogs'];
+            topLevelPerms.forEach(perm => {
+                target[perm] = copyPerm(source[perm], target[perm]?.id);
+            });
+
+            if (source.canImport !== undefined) target.canImport = source.canImport;
+            if (source.canExport !== undefined) target.canExport = source.canExport;
+
+            if (Array.isArray(target.fields) && Array.isArray(source.fields)) {
+                target.fields.forEach((tField: any) => {
+                    const sField = source.fields.find((s: any) => s.name === tField.name);
+                    if (sField && sField.permission) {
+                        tField.permission = sField.permission;
+                    }
+                });
+            }
+
+            if (Array.isArray(target.actions) && Array.isArray(source.actions)) {
+                target.actions.forEach((tAction: any) => {
+                    const sAction = source.actions.find((s: any) => s.name === tAction.name);
+                    if (sAction) {
+                        tAction.permission = copyPerm(sAction.permission, tAction.permission?.id);
+
+                        if (Array.isArray(tAction.parameters) && Array.isArray(sAction.parameters)) {
+                            tAction.parameters.forEach((tParam: any) => {
+                                const sParam = sAction.parameters.find((s: any) => s.name === tParam.name);
+                                if (sParam && sParam.permission) {
+                                    tParam.permission = sParam.permission;
+                                }
+                            });
+                        }
+                    }
+                });
+            }
+
+            const payload = { permissions: [target] };
+            await builderClient.put(`/entities/${input.entityId}/permissions`, payload);
+
+            return {
+                content: [{
+                    type: "text",
+                    text: `Successfully copied permissions from '${input.sourceGroup}' to '${input.targetGroup}'.`
+                }],
             };
         }
     },
