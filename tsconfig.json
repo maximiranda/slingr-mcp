@@ -1,0 +1,16 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "Node16",               /* Key for modern libs */
+    "moduleResolution": "Node16",     /* Key for modern libs */
+    "outDir": "./build",
+    "rootDir": ".",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,             /* Ignores type errors inside libraries */
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true
+  },
+  "include": ["src/**/*", "scripts/**/*"],
+  "exclude": ["node_modules"]
+}

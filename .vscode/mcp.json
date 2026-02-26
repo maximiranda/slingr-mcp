@@ -1,0 +1,16 @@
+{
+	"servers": {
+		"slingr-local": {
+			"type": "stdio",
+			"command": "node",
+			"args": [
+				"/home/maximiranda/slingr/slingr-mcp/build/src/index.js"
+			],
+			"env": {
+				"SLINGR_API_URL": "https://devtest.slingrs.io/dev/builder/api",
+				"SLINGR_TOKEN": "uH4FwPEOyXCgcTbecAKOAFCmJcG81lPc"
+			}
+		}
+	},
+	"inputs": []
+}
